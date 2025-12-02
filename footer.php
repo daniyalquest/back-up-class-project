@@ -46,15 +46,25 @@
     </div>
 
     <!-- Bootstrap core JavaScript-->
-    <script src="vendor/jquery/jquery.min.js"></script>
-    <script src="vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+    
+    
 
     <!-- Core plugin JavaScript-->
-    <script src="vendor/jquery-easing/jquery.easing.min.js"></script>
+    
 
     <!-- Custom scripts for all pages-->
     <script src="js/sb-admin-2.min.js"></script>
-
+<script>
+        $(document).ready(function() {
+            // This targets the specific file input using its ID
+            $('#categoryImage').on('change', function() {
+                // Get the name of the file
+                var fileName = $(this).val().split('\\').pop();
+                // Find the corresponding label and update its text
+                $(this).next('.custom-file-label').html(fileName);
+            });
+        });
+    </script>
 </body>
 
 </html>
