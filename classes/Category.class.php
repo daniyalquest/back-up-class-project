@@ -97,4 +97,28 @@ class Category {
             return ['success' => false, 'message' => 'Database Error: Could not add category.'];
         }
     }
+// Inside class Category { ... }
+
+    /**
+     * Retrieves all categories for use in dropdowns, etc.
+     * @return array Array of category data arrays.
+     */
+    public function getAllCategories(): array {
+        $conn = get_db_connection();
+        
+        // Only fetch the ID and Name (what the dropdown needs)
+        $sql = "SELECT id, name FROM `categories` ORDER BY name ASC";
+        
+        $result = $conn->query($sql);
+        $categories = [];
+        
+        if ($result && $result->num_rows > 0) {
+            while ($row = $result->fetch_assoc()) {
+                $categories[] = $row;
+            }
+        }
+        
+        $conn->close();
+        return $categories;
+    }
 }
