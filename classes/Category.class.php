@@ -1,124 +1,292 @@
 <?php
-// Include the database connection function
+// classes/Category.class.php
+
 require_once __DIR__ . '/../connection.php';
 
-class Category {
-    
-    /**
-     * Adds a new category to the database, handling validation and file upload.
-     * @param string $name The category name.
-     * @param string $description The category description.
-     * @param array $file_data The $_FILES['category_image'] array.
-     * @return array Associative array with 'success' (bool) and 'message' (string).
-     */
-    public function addCategory(string $name, string $description, array $file_data): array {
-        
+class Category
+{
+
+    /* --------------------------------------------
+     * ADD CATEGORY (with full validation)
+     * -------------------------------------------- */
+    public function addCategory(string $name, string $description, array $file_data): array
+    {
+
         $conn = get_db_connection();
         $upload_dir = 'img/categories/';
         $image_path_for_db = "";
 
-        // --- 1. Basic Input Validation ---
-        if (empty($name)) {
-            $conn->close();
+        /* ------------------------
+         * 1. Basic Required Fields
+         * ------------------------ */
+        if (empty(trim($name))) {
             return ['success' => false, 'message' => 'Category Name is required.'];
         }
 
-        // --- 2. Check for Duplicate Category Name (Secure Prepared Statement) ---
-        $check_sql = "SELECT COUNT(*) FROM `categories` WHERE `name` = ?";
+        if (empty(trim($description))) {
+            return ['success' => false, 'message' => 'Category Description is required.'];
+        }
+
+        // Image required for adding
+        if (empty($file_data) || $file_data['error'] !== UPLOAD_ERR_OK) {
+            return ['success' => false, 'message' => 'Category Image is required.'];
+        }
+
+        /* ------------------------
+         * 2. Duplicate Name Check
+         * ------------------------ */
+        $check_sql = "SELECT COUNT(*) FROM categories WHERE name = ?";
         $stmt = $conn->prepare($check_sql);
         $stmt->bind_param("s", $name);
         $stmt->execute();
-        $result = $stmt->get_result();
-        $row = $result->fetch_row();
+        $exists = $stmt->get_result()->fetch_row()[0];
         $stmt->close();
-        
-        if ($row[0] > 0) {
+
+        if ($exists > 0) {
+            return ['success' => false, 'message' => "A category named <strong>" . htmlspecialchars($name) . "</strong> already exists."];
+        }
+
+        /* ------------------------
+         * 3. SECURE IMAGE VALIDATION (MIME CHECK)
+         * ------------------------ */
+        $img = $file_data;
+
+        $allowed_mimes = ['image/jpeg', 'image/png', 'image/gif'];
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime_type = finfo_file($finfo, $img['tmp_name']);
+        finfo_close($finfo);
+
+        if (!in_array($mime_type, $allowed_mimes)) {
             $conn->close();
-            return ['success' => false, 'message' => "Error: A category named <strong>" . htmlspecialchars($name) . "</strong> already exists."];
+            return ['success' => false, 'message' => 'File Error: Invalid image file type detected.'];
+        } elseif ($img['size'] > 5000000) { // 5MB limit
+            $conn->close();
+            return ['success' => false, 'message' => 'Your file is too large! Max 5MB allowed.'];
         }
 
-        // --- 3. Handle File Upload (Secure File Handling) ---
-        if (!empty($file_data) && $file_data['error'] === UPLOAD_ERR_OK) {
-            
-            // Check directory existence
-            if (!is_dir($upload_dir)) {
-                if (!mkdir($upload_dir, 0777, true)) {
-                    $conn->close();
-                    // Avoid exposing filesystem details; log error and give generic user message
-                    error_log("Failed to create upload directory: " . $upload_dir);
-                    return ['success' => false, 'message' => 'File Error: Failed to prepare upload directory.'];
-                }
-            }
-
-            $img = $file_data;
-            $file_parts = explode('.', $img['name']);
-            $ext = strtolower(end($file_parts));
-            $allowed = ['jpg', 'jpeg', 'png', 'gif'];
-
-            if (!in_array($ext, $allowed)) {
-                 $conn->close();
-                 return ['success' => false, 'message' => 'You cannot upload files of type **' . $ext . '** (Only JPG, JPEG, PNG, GIF allowed).'];
-            } elseif ($img['size'] > 5000000) { // 5MB limit
-                 $conn->close();
-                 return ['success' => false, 'message' => 'Your file is too large! Max 5MB allowed.'];
-            } else {
-                // Generate a safe, unique filename
-                $safe_name = preg_replace('/[^a-z0-9]+/', '-', strtolower($name));
-                $new_name = $safe_name . "-" . time() . "." . $ext; // Adding a timestamp for uniqueness
-                $dest = $upload_dir . $new_name; 
-                
-                if (move_uploaded_file($img['tmp_name'], $dest)) {
-                    $image_path_for_db = $dest; 
-                } else {
-                    $conn->close();
-                    error_log("Error moving uploaded file: " . $img['tmp_name'] . " to " . $dest);
-                    return ['success' => false, 'message' => 'File Error: Failed to move uploaded file.'];
-                }
-            }
+        if (!is_dir($upload_dir)) {
+            mkdir($upload_dir, 0777, true);
         }
 
-        // --- 4. Execute Insertion (Secure Prepared Statement) ---
-        $sql = "INSERT INTO `categories` (`name`, `description`, `image`) VALUES (?, ?, ?)";
+        $safe_name = preg_replace('/[^a-z0-9]+/', '-', strtolower($name));
+        $new_name = $safe_name . "-" . time() . ".jpg"; // extension based on real MIME? optional
+        $dest = $upload_dir . $new_name;
+
+        if (!move_uploaded_file($img['tmp_name'], $dest)) {
+            return ['success' => false, 'message' => "Error saving uploaded image."];
+        }
+
+        $image_path_for_db = $dest;
+
+        /* ------------------------
+         * 4. Insert Category
+         * ------------------------ */
+        $sql = "INSERT INTO categories (name, description, image) VALUES (?, ?, ?)";
         $stmt = $conn->prepare($sql);
-        
-        // 'sss' denotes three string parameters
         $stmt->bind_param("sss", $name, $description, $image_path_for_db);
 
         if ($stmt->execute()) {
-            $stmt->close();
-            $conn->close();
-            return ['success' => true, 'message' => 'New category added successfully!'];
-        } else {
-            // Log the actual database error internally
-            error_log("Database Insert Error: " . $stmt->error);
-            $stmt->close();
-            $conn->close();
-            // Return a generic error message to the user
-            return ['success' => false, 'message' => 'Database Error: Could not add category.'];
+            return ['success' => true, 'message' => "Category added successfully!"];
         }
-    }
-// Inside class Category { ... }
 
-    /**
-     * Retrieves all categories for use in dropdowns, etc.
-     * @return array Array of category data arrays.
-     */
-    public function getAllCategories(): array {
+        error_log("Database Insert Error: " . $stmt->error);
+        return ['success' => false, 'message' => "Database Error: Could not add category."];
+    }
+
+
+    /* --------------------------------------------
+     * GET ALL CATEGORIES (full data)
+     * -------------------------------------------- */
+    public function getAllCategories(): array
+    {
         $conn = get_db_connection();
-        
-        // Only fetch the ID and Name (what the dropdown needs)
-        $sql = "SELECT id, name FROM `categories` ORDER BY name ASC";
-        
+        $sql = "SELECT id, name, description, image FROM categories ORDER BY name ASC";
         $result = $conn->query($sql);
-        $categories = [];
-        
-        if ($result && $result->num_rows > 0) {
+
+        $data = [];
+        if ($result) {
             while ($row = $result->fetch_assoc()) {
-                $categories[] = $row;
+                $data[] = $row;
             }
         }
-        
-        $conn->close();
-        return $categories;
+
+        return $data;
+    }
+
+
+    /* --------------------------------------------
+     * GET CATEGORY BY ID
+     * -------------------------------------------- */
+    public function getCategoryById(int $id): ?array
+    {
+        $conn = get_db_connection();
+        $sql = "SELECT id, name, description, image FROM categories WHERE id = ?";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("i", $id);
+        $stmt->execute();
+        $res = $stmt->get_result()->fetch_assoc();
+
+        return $res ?: null;
+    }
+
+
+    /* --------------------------------------------
+     * UPDATE CATEGORY (with required validation)
+     * -------------------------------------------- */
+    public function updateCategory(int $id, string $name, string $description, array $file_data, string $old_image): array
+    {
+
+        $conn = get_db_connection();
+        $upload_dir = "img/categories/";
+        $image_path_for_db = $old_image;
+
+        /* ------------------------
+         * 1. Required Validation
+         * ------------------------ */
+        if ($id <= 0) {
+            return ['success' => false, 'message' => "Invalid category ID."];
+        }
+
+        if (empty(trim($name))) {
+            return ['success' => false, 'message' => "Category Name is required."];
+        }
+
+        if (empty(trim($description))) {
+            return ['success' => false, 'message' => "Category Description is required."];
+        }
+
+        /* ------------------------
+         * 2. Check Duplicate Name
+         * ------------------------ */
+        $sql = "SELECT COUNT(*) FROM categories WHERE name = ? AND id != ?";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("si", $name, $id);
+        $stmt->execute();
+        $count = $stmt->get_result()->fetch_row()[0];
+
+        if ($count > 0) {
+            return ['success' => false, 'message' => "Another category already uses this name."];
+        }
+
+        /* ------------------------
+         * 3. Handle New Image (SECURE MIME CHECK)
+         * ------------------------ */
+        if (!empty($file_data) && $file_data['error'] === UPLOAD_ERR_OK) {
+
+            $img = $file_data;
+
+            $allowed_mimes = ['image/jpeg', 'image/png', 'image/gif'];
+
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $mime_type = finfo_file($finfo, $img['tmp_name']);
+            finfo_close($finfo);
+
+            if (!in_array($mime_type, $allowed_mimes)) {
+                $conn->close();
+                return ['success' => false, 'message' => "File Error: Invalid image file type detected."];
+            } elseif ($img['size'] > 5000000) {
+                $conn->close();
+                return ['success' => false, 'message' => "Your file is too large! Max 5MB allowed."];
+            }
+
+            if (!is_dir($upload_dir)) {
+                mkdir($upload_dir, 0777, true);
+            }
+
+            $safe_name = preg_replace('/[^a-z0-9]+/', '-', strtolower($name));
+            $new_name = $safe_name . "-" . time() . ".jpg";
+            $dest = $upload_dir . $new_name;
+
+            if (!move_uploaded_file($img['tmp_name'], $dest)) {
+                return ['success' => false, 'message' => "Failed to upload new image."];
+            }
+
+            // Delete old file
+            if (!empty($old_image) && file_exists($old_image)) {
+                unlink($old_image);
+            }
+
+            $image_path_for_db = $dest;
+        }
+
+        /* ------------------------
+         * 4. Update the Database
+         * ------------------------ */
+        $sql = "UPDATE categories SET name = ?, description = ?, image = ? WHERE id = ?";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("sssi", $name, $description, $image_path_for_db, $id);
+
+        if ($stmt->execute()) {
+            return ['success' => true, 'message' => "Category updated successfully!"];
+        }
+
+        error_log("Database Update Error: " . $stmt->error);
+        return ['success' => false, 'message' => "Database Error: Could not update category."];
+    }
+
+
+    /* --------------------------------------------
+     * DELETE CATEGORY
+     * -------------------------------------------- */
+    public function deleteCategory(int $id): array
+    {
+
+        $conn = get_db_connection();
+
+        // Block deletion if linked
+        $sql = "SELECT COUNT(*) FROM products WHERE category_id = ?";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("i", $id);
+        $stmt->execute();
+        $count = $stmt->get_result()->fetch_row()[0];
+
+        if ($count > 0) {
+            return ['success' => false, 'message' => "Cannot delete: Category is linked to $count product(s)."];
+        }
+
+        // Get image path
+        $sql = "SELECT image FROM categories WHERE id = ?";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("i", $id);
+        $stmt->execute();
+        $image = $stmt->get_result()->fetch_row()[0] ?? "";
+
+        // Delete category
+        $sql = "DELETE FROM categories WHERE id = ?";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("i", $id);
+
+        if ($stmt->execute()) {
+
+            if (!empty($image) && file_exists($image)) {
+                unlink($image);
+            }
+
+            return ['success' => true, 'message' => "Category deleted successfully!"];
+        }
+
+        error_log("Delete Error: " . $stmt->error);
+        return ['success' => false, 'message' => "Database Error: Could not delete category."];
+    }
+
+
+    /* --------------------------------------------
+     * DROPDOWN — ID + Name Only
+     * -------------------------------------------- */
+    public function getAllCategoriesForDropdown(): array
+    {
+        $conn = get_db_connection();
+        $sql = "SELECT id, name FROM categories ORDER BY name ASC";
+        $result = $conn->query($sql);
+
+        $list = [];
+        while ($row = $result->fetch_assoc()) {
+            $list[] = $row;
+        }
+
+        return $list;
     }
 }
+
+?>
